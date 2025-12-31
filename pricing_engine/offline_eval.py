@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
-from Bandit import ThompsonBandit
-from safety import SafetyLayer
+from .Bandit import ThompsonBandit
+from .safety import SafetyLayer
 
 @dataclass
 class TrustMetrics:
