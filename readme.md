@@ -17,7 +17,7 @@ The architecture mirrors how pricing systems are deployed in mature marketplaces
 
 Given a listing with contextual features `x_t`, select a price `p_t` at time `t` to maximize expected revenue:
 
-![](https://render.githubusercontent.com/render/math?math=%5Cmax_%7Bp_t%7D%20%5C;%20%5Cmathbb%7BE%7D%5Bp_t%20%5Ccdot%20%5Cmathbb%7B1%7D%28%5Ctext%7Bbooking%7D%29%20%5Cmid%20x_t%5D)
+$$\max_{p_t} \; \mathbb{E}[p_t \cdot \mathbb{1}(\text{booking}) \mid x_t]$$
 
 Key challenges addressed:
 
