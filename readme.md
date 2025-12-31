@@ -130,6 +130,7 @@ pricing_engine/
 ├── safety.py           # Low-latency constraint enforcement
 ├── data_loader.py      # ETL and validation utilities
 ├── offline_eval.py     # Doubly robust offline evaluation
+├── benchmark.py        # Benchmark of the whole system
 
 notebooks/
 ├── 01_causal_identification.ipynb
@@ -137,6 +138,7 @@ notebooks/
 ├── 03_bandit_adaptation.ipynb
 ├── 04_safety_validation.ipynb
 ├── 05_offline_evaluation.ipynb
+├── 06_benchmark_test.ipynb
 ```
 
 ---
