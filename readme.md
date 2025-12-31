@@ -124,19 +124,23 @@ These should be placed in the project root or configured via environment variabl
 
 ```
 pricing_engine/
+├── audit.py            # Market Audit (Identifiablity, sparsity, Confounding)
 ├── causal_model.py     # Causal elasticity estimation (Double ML)
 ├── demand_model.py     # Hierarchical Bayesian demand model
 ├── bandit.py           # Contextual Thompson Sampling agent
 ├── safety.py           # Low-latency constraint enforcement
 ├── data_loader.py      # ETL and validation utilities
 ├── offline_eval.py     # Doubly robust offline evaluation
+├── benchmark.py        # Benchmark of the whole system
 
 notebooks/
+├── 00_data_audit.ipynb
 ├── 01_causal_identification.ipynb
 ├── 02_demand_modeling.ipynb
 ├── 03_bandit_adaptation.ipynb
 ├── 04_safety_validation.ipynb
 ├── 05_offline_evaluation.ipynb
+├── 06_benchmark_test.ipynb
 ```
 
 ---
