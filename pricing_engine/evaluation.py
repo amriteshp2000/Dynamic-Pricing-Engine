@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import logging
 
 # UPDATED IMPORT: Assumes you renamed pricing_agent.py -> bandit.py
-from .Bandit import ThompsonBandit  
-from .safety import SafetyLayer
+from Bandit import ThompsonBandit  
+from safety import SafetyLayer
 
 logger = logging.getLogger("PriceEngine_Eval")
 

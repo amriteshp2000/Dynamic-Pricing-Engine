@@ -4,7 +4,7 @@ import pandas as pd
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import logging
-from .demand_model import HierarchicalDemandModel
+from demand_model import HierarchicalDemandModel
 
 logger = logging.getLogger("PriceEngine_Agent")
 
