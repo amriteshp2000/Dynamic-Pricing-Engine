@@ -7,7 +7,7 @@
 This repository implements a **production-oriented dynamic pricing system** using a **contextual multi-armed bandit** framework with Bayesian learning.  
 The system is designed for **short-horizon revenue maximization under uncertainty**, where demand feedback is sparse, delayed, and non-stationary.
 
-Unlike rule-based or static ML pricing approaches, pricing decisions here are made **online**, balancing exploration and exploitation using **Thompson Sampling**, while remaining compatible with **offline causal estimation, cold-start priors, and hard safety constraints**.
+Unlike rule-based or static ML pricing approaches, pricing decisions here are made **online**, balancing exploration and exploitation using **Thompson Sampling**, while remaining compatible with **off-line scientific estimation and a safety governor**.
 
 The architecture mirrors how pricing systems are deployed in mature marketplaces rather than academic reinforcement learning benchmarks.
 
@@ -15,11 +15,9 @@ The architecture mirrors how pricing systems are deployed in mature marketplaces
 
 ## Problem Statement
 
-Given a listing with contextual features \(x_t\), select a price \(p_t\) at time \(t\) to maximize expected revenue:
+Given a listing with contextual features `x_t`, select a price `p_t` at time `t` to maximize expected revenue:
 
-\[
-\max_{p_t} \; \mathbb{E}[p_t \cdot \mathbb{1}(\text{booking}) \mid x_t]
-\]
+$$\max_{p_t} \; \mathbb{E}[p_t \cdot \mathbb{1}(\text{booking}) \mid x_t]$$
 
 Key challenges addressed:
 
@@ -36,27 +34,21 @@ Key challenges addressed:
 
 In historical marketplace logs, price is endogenous. High prices frequently coincide with periods of high demand (e.g., holidays, local events), inducing a spurious correlation:
 
-\[
-\text{Price} \leftrightarrow \text{Demand}
-\]
+`Price <-> Demand`
 
 Predictive models trained directly on such data often learn an incorrect positive relationship between price and booking probability, leading to unstable pricing behavior in production.
 
 ### Causal Estimation Approach
 
-We explicitly estimate the causal effect of price on demand:
+We explicitly estimate the causal effect of price on demand (intervention notation):
 
-\[
-P(\text{Booking} \mid do(\text{Price}))
-\]
+$$P(\text{Booking} \mid do(\text{Price}))$$
 
 using Double Machine Learning (DML). Orthogonalization removes bias from observed confounders such as seasonality, location, and listing attributes, yielding a stable estimate of price elasticity.
 
 Empirically, the recovered elasticity is:
 
-\[
-\beta \approx -0.035
-\]
+$$\beta \approx -0.035$$
 
 which is consistent with standard economic expectations for short-term accommodation markets.
 
@@ -192,12 +184,11 @@ They inform the bandit via priors only.
 
 #### Bandit Formulation
 
-- **Context** \(x_t\): listing + temporal + market features  
-- **Action** \(p_t\): candidate price  
+- **Context** `x_t`: listing + temporal + market features  
+- **Action** `p_t`: candidate price  
 - **Reward**:
-\[
-r_t = p_t \cdot \mathbb{1}(\text{booking})
-\]
+
+$$r_t = p_t \cdot \mathbb{1}(\text{booking})$$
 
 The problem is treated as a **contextual bandit**, not full reinforcement learning, as actions do not induce long-horizon state transitions.
 
@@ -206,19 +197,15 @@ The problem is treated as a **contextual bandit**, not full reinforcement learni
 
 Demand is modeled using **Streaming Bayesian Ridge Regression**:
 
-\[
-\mathbb{P}(\text{booking} \mid x, p) = f(x, \log p)
-\]
+$$\mathbb{P}(\text{booking} \mid x, p) = f(x, \log p)$$
 
 Posterior updates:
 
-\[
-A_t = \lambda A_{t-1} + x_t x_t^\top,\quad
-b_t = \lambda b_{t-1} + y_t x_t
-\]
+$$A_t = \lambda A_{t-1} + x_t x_t^\top,\quad
+b_t = \lambda b_{t-1} + y_t x_t$$
 
 Where:
-- \( \lambda \) is an exponential forgetting factor
+- `lambda` is an exponential forgetting factor
 - Enables adaptation to non-stationary demand
 - Prevents overfitting to stale data
 
@@ -228,19 +215,16 @@ Where:
 At each decision step:
 
 1. Sample parameters from the posterior:
-\[
-\tilde{\theta}_t \sim \mathcal{N}(\mu_t, \Sigma_t)
-\]
+
+$$\tilde{\theta}_t \sim \mathcal{N}(\mu_t, \Sigma_t)$$
 
 2. Evaluate expected revenue for candidate prices:
-\[
-\hat{r}(p) = p \cdot \mathbb{P}_{\tilde{\theta}_t}(\text{booking} \mid x_t, p)
-\]
+
+$$\hat{r}(p) = p \cdot \mathbb{P}_{\tilde{\theta}_t}(\text{booking} \mid x_t, p)$$
 
 3. Select:
-\[
-p_t^* = \arg\max_p \hat{r}(p)
-\]
+
+$$p_t^* = \arg\max_p \hat{r}(p)$$
 
 Exploration arises **naturally from posterior uncertainty**, eliminating heuristic exploration schedules.
 
@@ -250,10 +234,8 @@ Exploration arises **naturally from posterior uncertainty**, eliminating heurist
 
 For new listings, posterior parameters are initialized using **precision-weighted fusion**:
 
-\[
-\mu = \frac{\mu_{\text{prior}}/\sigma_{\text{prior}}^2 + \mu_{\text{online}}/\sigma_{\text{online}}^2}
-{1/\sigma_{\text{prior}}^2 + 1/\sigma_{\text{online}}^2}
-\]
+$$\mu = \frac{\mu_{\text{prior}}/\sigma_{\text{prior}}^2 + \mu_{\text{online}}/\sigma_{\text{online}}^2}
+{1/\sigma_{\text{prior}}^2 + 1/\sigma_{\text{online}}^2}$$
 
 As online evidence accumulates, the model **automatically transitions** to listing-specific learning without manual thresholds.
 
@@ -305,13 +287,11 @@ Policy value is estimated using a **Doubly Robust (DR)** estimator that combines
 
 For each replayed decision:
 
-\[
-\hat{V}_{DR}(p_{agent}) =
+$$\hat{V}_{DR}(p_{agent}) =
 \hat{r}(p_{agent}) +
 \mathbb{1}(|p_{hist} - p_{agent}| < \epsilon)
 \cdot
-(r_{obs} - \hat{r}(p_{hist}))
-\]
+(r_{obs} - \hat{r}(p_{hist}))$$
 
 This estimator remains unbiased if **either** the demand model or the historical logging process is correctly specified.
 
@@ -396,5 +376,3 @@ Evaluation on 50 held-out listings:
 
 ## ⚖️ License
 Distributed under the MIT License. See LICENSE for more information.
-
-
