@@ -4,7 +4,8 @@ import pandas as pd
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import logging
-from .demand_model import HierarchicalDemandModel
+from .demand_model import HierarchicalBayesianLogisticDemand, SeasonalElasticityDemand, MonotoneDemandWrapper, NeighborhoodResidualCorrector, MonotoneGAMDemand
+
 
 logger = logging.getLogger("PriceEngine_Agent")
 
@@ -55,7 +56,7 @@ class ThompsonBandit:
     Module 03: The Agent (With Panic Logic).
     """
     
-    def __init__(self, prior_model: HierarchicalDemandModel, forgetting_factor: float = 0.90):
+    def __init__(self, prior_model: HierarchicalBayesianLogisticDemand, forgetting_factor: float = 0.90):
         self.prior_model = prior_model
         self.lam = forgetting_factor
         self.online_models: Dict[str, StreamingBayesianRidge] = {}
