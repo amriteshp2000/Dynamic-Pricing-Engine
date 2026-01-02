@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
-from .Bandit import ThompsonBandit
+from .Bandit import ThompsonPricingBandit
 from .safety import SafetyLayer
 
 @dataclass
@@ -26,7 +26,7 @@ class TrustEvaluator:
     Calculates Doubly Robust Revenue AND Behavioral Metrics.
     """
     
-    def __init__(self, agent: ThompsonBandit, safety: SafetyLayer):
+    def __init__(self, agent: ThompsonPricingBandit, safety: SafetyLayer):
         self.agent = agent
         self.safety = safety
 
