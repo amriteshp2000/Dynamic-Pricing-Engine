@@ -38,7 +38,7 @@ def sigmoid(z):
 class StreamingBayesianLogistic:
     """
     Numerically stable online Bayesian logistic regression
-    using precision matrix updates.
+    using precision-matrix updates with forgetting and jitter.
     """
 
     def __init__(self, n_features: int, lambda_forget=0.95, prior_var=5.0):
@@ -47,38 +47,46 @@ class StreamingBayesianLogistic:
 
         # Precision matrix (inverse covariance)
         self.P = np.eye(n_features) / prior_var
+        self.min_precision = 1e-3  # CRITICAL SAFETY FLOOR
+
         self.n_updates = 0
 
     def update(self, x: np.ndarray, y: float):
         x = x.reshape(-1)
 
-        # Forgetting on precision (stable)
-        self.P *= self.lam
+        # Forgetting (but keep SPD)
+        self.P = self.lam * self.P + (1 - self.lam) * np.eye(len(x)) * self.min_precision
 
         p = sigmoid(self.mu @ x)
-        W = max(p * (1 - p), 1e-3)  # floor curvature
 
-        # Rank-1 update to precision
+        # Curvature floor (prevents zero Hessian)
+        W = max(p * (1 - p), 1e-3)
+
+        # Rank-1 precision update
         self.P += W * np.outer(x, x)
 
-        # Newton step
-        grad = x * (y - p)
-        delta = np.linalg.solve(self.P, grad)
+        # Safe Newton step
+        try:
+            delta = np.linalg.solve(self.P, x * (y - p))
+        except np.linalg.LinAlgError:
+            # Emergency stabilization (should almost never trigger)
+            self.P += np.eye(len(x)) * self.min_precision
+            delta = np.linalg.solve(self.P, x * (y - p))
 
         self.mu += delta
         self.n_updates += 1
 
-    def predict(self, x: np.ndarray) -> Tuple[float, float]:
+    def predict(self, x: np.ndarray):
         x = x.reshape(-1)
         mean = sigmoid(self.mu @ x)
         mean = np.clip(mean, 0.001, 0.999)
 
-        cov_x = np.linalg.solve(self.P, x)
-        var_latent = x @ cov_x
+        # Compute variance via solve (no inverse)
+        v = np.linalg.solve(self.P, x)
+        var_latent = x @ v
         var_prob = (mean * (1 - mean))**2 * var_latent
 
         return mean, np.sqrt(var_prob + 1e-9)
-
 
 # ============================================================
 # Base Bandit (STRICT PRODUCTION CONTRACT)
