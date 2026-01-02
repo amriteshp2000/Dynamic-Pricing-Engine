@@ -111,6 +111,8 @@ class HierarchicalBayesianLogisticDemand:
 
     def fit(self, df: pd.DataFrame, feature_cols: list[str]) -> None:
         logger.info("Training Hierarchical Bayesian Logistic Demand Model")
+        df = df.reset_index(drop=True)
+
 
         self.feature_cols = feature_cols
         self.city_n = len(df)

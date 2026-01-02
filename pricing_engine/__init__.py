@@ -1,18 +1,77 @@
 # pricing_engine/__init__.py
 
+# ---------------------------------------------------------------------
+# Demand & Causal Models
+# ---------------------------------------------------------------------
+
 from .causal_model import DML_ElasticityModel
-from .demand_model import HierarchicalBayesianLogisticDemand, SeasonalElasticityDemand, MonotoneDemandWrapper, NeighborhoodResidualCorrector, MonotoneGAMDemand
-from .Bandit import ThompsonPricingBandit, BayesianUCBBandit, LinUCBBandit, PricingDecision, BasePricingBandit, StreamingBayesianLogistic
+
+from .demand_model import (
+    HierarchicalBayesianLogisticDemand,
+    SeasonalElasticityDemand,
+    MonotoneDemandWrapper,
+    NeighborhoodResidualCorrector,
+    MonotoneGAMDemand,
+)
+
+# ---------------------------------------------------------------------
+# Pricing Bandits / Policies
+# ---------------------------------------------------------------------
+
+from .Bandit import (
+    BasePricingBandit,
+    ThompsonPricingBandit,
+    BayesianUCBBandit,
+    LinUCBBandit,
+    StreamingBayesianLogistic,
+    PricingDecision,
+)
+
+# ---------------------------------------------------------------------
+# Safety
+# ---------------------------------------------------------------------
+
 from .safety import SafetyGovernor, SafetyConfig
-from .offline_eval import TrustEvaluator, TrustMetrics
+
+# ---------------------------------------------------------------------
+# Evaluation Suite (EXPOSED AS MODULE)
+# ---------------------------------------------------------------------
+
+from . import evaluation
+
+# ---------------------------------------------------------------------
+# Data Utilities
+# ---------------------------------------------------------------------
+
 from .data_loader import load_and_clean_seattle_data
 
+# ---------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------
+
 __all__ = [
+    # Demand & Causal
     "DML_ElasticityModel",
-    "HierarchicalDemandModel",
-    "ThompsonBandit",
-    "SafetyLayer",
-    "TrustEvaluator",
-    "TrustMetrics",
-    "load_and_clean_seattle_data"
+    "HierarchicalBayesianLogisticDemand",
+    "SeasonalElasticityDemand",
+    "MonotoneDemandWrapper",
+    "NeighborhoodResidualCorrector",
+    "MonotoneGAMDemand",
+
+    # Bandits
+    "BasePricingBandit",
+    "ThompsonPricingBandit",
+    "BayesianUCBBandit",
+    "LinUCBBandit",
+    "StreamingBayesianLogistic",
+    "PricingDecision",
+
+    # Safety
+    "SafetyGovernor", "SafetyConfig",
+
+    # Evaluation (module-level)
+    "evaluation",
+
+    # Data
+    "load_and_clean_seattle_data",
 ]
