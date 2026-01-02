@@ -4,7 +4,7 @@ import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 from .Bandit import ThompsonPricingBandit
-from .safety import SafetyLayer
+from .safety import SafetyGovernor, SafetyConfig
 
 @dataclass
 class TrustMetrics:
@@ -26,7 +26,7 @@ class TrustEvaluator:
     Calculates Doubly Robust Revenue AND Behavioral Metrics.
     """
     
-    def __init__(self, agent: ThompsonPricingBandit, safety: SafetyLayer):
+    def __init__(self, agent: ThompsonPricingBandit, safety: SafetyGovernor):
         self.agent = agent
         self.safety = safety
 
