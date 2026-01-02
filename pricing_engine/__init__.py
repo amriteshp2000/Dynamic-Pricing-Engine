@@ -25,6 +25,8 @@ from .Bandit import (
     LinUCBBandit,
     StreamingBayesianLogistic,
     PricingDecision,
+    SafetyGatedBandit,
+    EnterpriseSafeBandit,
 )
 
 # ---------------------------------------------------------------------
@@ -65,6 +67,9 @@ __all__ = [
     "LinUCBBandit",
     "StreamingBayesianLogistic",
     "PricingDecision",
+    "SafetyGatedBandit",
+    "EnterpriseSafeBandit",
+    
 
     # Safety
     "SafetyGovernor", "SafetyConfig",

@@ -330,3 +330,81 @@ class LinUCBBandit(BasePricingBandit):
             source="Panic" if panic else "LinUCB",
             panic_mode=panic,
         )
+
+
+
+# ============================================================
+# 4 Combined metapolicy (thompson + UCB + LinUCB)
+# ============================================================
+
+
+class SafetyGatedBandit:
+    def __init__(self, thompson, ucb, linucb):
+        self.thompson = thompson
+        self.ucb = ucb
+        self.linucb = linucb
+
+    def choose_price(self, context, min_p=50, max_p=300):
+        d_t = self.thompson.choose_price(context, min_p, max_p)
+        d_u = self.ucb.choose_price(context, min_p, max_p)
+        d_l = self.linucb.choose_price(context, min_p, max_p)
+
+        lower = min(d_u.selected_price, d_l.selected_price)
+        upper = max(d_u.selected_price, d_l.selected_price)
+        final_price = np.clip(d_t.selected_price, lower, upper)
+
+        self._last = (d_t, d_u, d_l)
+
+        return PricingDecision(
+            selected_price=final_price,
+            expected_revenue=d_t.expected_revenue,
+            uncertainty_sigma=d_t.uncertainty_sigma,
+            source="SafetyGated(3)",
+            panic_mode=d_t.panic_mode or d_u.panic_mode or d_l.panic_mode,
+        )
+
+    def update(self, context, decision, booked):
+        d_t, d_u, d_l = self._last
+
+        # Each bandit learns from ITS OWN action
+        self.thompson.update(context, d_t.selected_price, booked)
+        self.ucb.update(context, d_u.selected_price, booked)
+        self.linucb.update(context, d_l.selected_price, booked)
+
+
+
+
+
+# ============================================================
+# 4 Combined metapolicy (UCB + LinUCB)
+# ============================================================
+
+
+
+class EnterpriseSafeBandit:
+    def __init__(self, ucb, linucb, weight_ucb=0.7):
+        self.ucb = ucb
+        self.linucb = linucb
+        self.w = weight_ucb
+
+    def choose_price(self, context, min_p=50, max_p=300):
+        d_u = self.ucb.choose_price(context, min_p, max_p)
+        d_l = self.linucb.choose_price(context, min_p, max_p)
+
+        self._last = (d_u, d_l)
+
+        price = self.w * d_u.selected_price + (1 - self.w) * d_l.selected_price
+
+        return PricingDecision(
+            selected_price=price,
+            expected_revenue=d_u.expected_revenue,
+            uncertainty_sigma=d_u.uncertainty_sigma,
+            source="Enterprise(UCB+LinUCB)",
+            panic_mode=d_u.panic_mode or d_l.panic_mode,
+        )
+
+    def update(self, context, decision, booked):
+        d_u, d_l = self._last
+        self.ucb.update(context, d_u.selected_price, booked)
+        self.linucb.update(context, d_l.selected_price, booked)
+
