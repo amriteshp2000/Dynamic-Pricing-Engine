@@ -4,7 +4,7 @@
 # Demand & Causal Models
 # ---------------------------------------------------------------------
 
-from .causal_model import DML_ElasticityModel
+from .causal_model import FixedEffectElasticity, LinearDMLElasticity, CausalForestElasticity, run_causal_pipeline
 
 from .demand_model import (
     HierarchicalBayesianLogisticDemand,

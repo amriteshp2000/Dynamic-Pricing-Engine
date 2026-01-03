@@ -1,62 +1,100 @@
-
 import pandas as pd
 import numpy as np
 import logging
 
 logger = logging.getLogger("PriceEngine_Loader")
 
+
 def load_and_clean_seattle_data(calendar_path: str, listings_path: str) -> pd.DataFrame:
     """
-    Robust loader for Seattle Airbnb data with PRICE IMPUTATION.
-    Recover prices for booked nights using forward/backward fill.
+    Canonical data loader for dynamic pricing experiments.
+
+    DESIGN CONTRACT:
+    - No price imputation
+    - Explicit exposure, action, outcome flags
+    - No row dropped due to censoring
+    - Safe to use for demand modeling, bandits, evaluation, benchmarking
     """
+
     logger.info("Loading raw data...")
     df_cal = pd.read_csv(calendar_path)
     df_list = pd.read_csv(listings_path)
-    
-    # --- 1. Clean Price Column (Strings to Float) ---
+
+    # --------------------------------------------------
+    # 1. Parse date
+    # --------------------------------------------------
+    df_cal['date'] = pd.to_datetime(df_cal['date'], errors='coerce')
+
+    # --------------------------------------------------
+    # 2. Clean price (NO IMPUTATION)
+    # --------------------------------------------------
+    df_cal['price_raw'] = df_cal['price']
+
     df_cal['price'] = (
         df_cal['price']
         .astype(str)
-        .str.replace(r'[$,]', '', regex=True)
+        .str.replace(r'[^\d.,-]', '', regex=True)
+        .str.replace(',', '', regex=False)
         .str.strip()
     )
     df_cal['price'] = pd.to_numeric(df_cal['price'], errors='coerce')
-    
-    # --- 2. CRITICAL FIX: Impute Prices for Booked Nights ---
-    # Sort by listing and date to ensure continuity
-    df_cal['date'] = pd.to_datetime(df_cal['date'])
-    df_cal = df_cal.sort_values(['listing_id', 'date'])
-    
-    # Forward Fill then Backward Fill prices WITHIN each listing
-    # This assumes if it's booked today, the price was likely the same as yesterday
-    df_cal['price'] = df_cal.groupby('listing_id')['price'].ffill().bfill()
-    
-    # Now we drop only if imputation completely failed (host never set a price)
-    initial_len = len(df_cal)
-    df_cal = df_cal.dropna(subset=['price'])
-    logger.info(f"Recovered prices. Kept {len(df_cal)} / {initial_len} rows.")
 
-    # --- 3. Create Demand Signal ---
-    # available='f' means it WAS booked.
-    df_cal['is_booked'] = (df_cal['available'].str.lower() == 'f').astype(int)
-    
-    # --- 4. Merge Listing Metadata ---
+    # Action observed only when price is visible
+    df_cal['action_observed'] = df_cal['price'].notna()
+
+    # --------------------------------------------------
+    # 3. Exposure & outcome semantics (explicit)
+    # --------------------------------------------------
+    # Exposure: listing was available to be booked
+    df_cal['exposed'] = (df_cal['available'].str.lower() == 't')
+
+    # Outcome proxy: booked vs not (AUDIT / RESEARCH PROXY ONLY)
+    df_cal['is_booked_proxy'] = (df_cal['available'].str.lower() == 'f').astype(int)
+
+    # Outcome observed only when exposed
+    df_cal['outcome_observed'] = df_cal['exposed']
+
+    # --------------------------------------------------
+    # 4. Time features (safe, non-leaky)
+    # --------------------------------------------------
+    df_cal['dow'] = df_cal['date'].dt.dayofweek
+    df_cal['week'] = df_cal['date'].dt.isocalendar().week.astype(int)
+    df_cal['month'] = df_cal['date'].dt.month
+
+    # --------------------------------------------------
+    # 5. Merge listing metadata (immutable / slow-moving only)
+    # --------------------------------------------------
     if 'id' in df_list.columns:
         df_list = df_list.rename(columns={'id': 'listing_id'})
-        
-    cols_to_keep = ['listing_id', 'neighbourhood_group_cleansed']
-    if 'neighbourhood_group_cleansed' not in df_list.columns:
-         cols_to_keep = ['listing_id', 'neighbourhood']
-         
-    df_merged = df_cal.merge(df_list[cols_to_keep], on='listing_id', how='inner')
-    
-    # Rename for consistency
-    neighbor_col = [c for c in df_merged.columns if 'neighbourhood' in c][0]
-    df_merged = df_merged.rename(columns={neighbor_col: 'neighborhood'})
-    
-    # Check if we have both 0s and 1s now
-    booked_count = df_merged['is_booked'].sum()
-    logger.info(f"Total Booked Nights Recovered: {booked_count}")
-    
-    return df_merged
+
+    # Minimal, safe columns
+    meta_cols = [
+        'listing_id',
+        'neighbourhood_group_cleansed',
+        'neighbourhood',
+        'latitude',
+        'longitude',
+        'room_type',
+        'property_type',
+        'accommodates',
+        'bedrooms',
+        'bathrooms'
+    ]
+    meta_cols = [c for c in meta_cols if c in df_list.columns]
+
+    df = df_cal.merge(df_list[meta_cols], on='listing_id', how='inner')
+
+    # Normalize neighborhood column
+    neighborhood_cols = [c for c in df.columns if 'neighbourhood' in c]
+    if neighborhood_cols:
+        df = df.rename(columns={neighborhood_cols[0]: 'neighborhood'})
+
+    # --------------------------------------------------
+    # 6. Sanity logging (no filtering)
+    # --------------------------------------------------
+    logger.info(f"Total rows loaded: {len(df)}")
+    logger.info(f"Action observed rate: {df['action_observed'].mean():.2%}")
+    logger.info(f"Exposure rate: {df['exposed'].mean():.2%}")
+    logger.info(f"Booked proxy rate: {df['is_booked_proxy'].mean():.2%}")
+
+    return df

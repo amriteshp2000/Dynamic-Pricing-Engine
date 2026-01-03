@@ -1,271 +1,317 @@
+import time
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
-from typing import Dict
-from sklearn.preprocessing import StandardScaler
-import logging
-from pygam import LogisticGAM, s, f
+from abc import ABC, abstractmethod
+from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger("PriceEngine_Demand")
+# ============================================================
+# Metrics
+# ============================================================
 
-# ---------------------------------------------------------------------
-# Output container
-# ---------------------------------------------------------------------
-@dataclass
-class DemandPrediction:
-    prob: float
-    std_dev: float
-    epistemic_std: float
-    aleatoric_std: float
-    source_level: str
-    n_obs: int
+from sklearn.metrics import log_loss, roc_auc_score, mean_squared_error
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from scipy.special import expit
 
+# ============================================================
+# Shared Evaluation Utilities
+# ============================================================
 
-# ---------------------------------------------------------------------
-# Bayesian Logistic Regression via IRLS (Laplace Approximation)
-# ---------------------------------------------------------------------
-class BayesianLogisticIRLS:
+def _safe_clip(pred: np.ndarray) -> np.ndarray:
+    pred = np.nan_to_num(pred, nan=0.0, posinf=1.0, neginf=0.0)
+    return np.clip(pred, 0.0, 1.0)
+
+def eval_binary(y_true, y_pred):
+    y_pred = _safe_clip(y_pred)
+    return {
+        "logloss": log_loss(y_true, y_pred),
+        "auc": roc_auc_score(y_true, y_pred),
+    }
+
+def eval_regression(y_true, y_pred):
+    return {
+        "rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
+    }
+
+# ============================================================
+# Base Interface
+# ============================================================
+
+class DemandModel(ABC):
     """
-    Bayesian Logistic Regression with Gaussian prior
-    using Iteratively Reweighted Least Squares (Laplace approximation).
+    Base contract for all demand models.
     """
 
-    def __init__(self, prior_mean: np.ndarray, prior_cov: np.ndarray, max_iter: int = 25):
-        self.prior_mean = prior_mean
-        self.prior_cov = prior_cov
-        self.prior_prec = np.linalg.inv(prior_cov)
-        self.max_iter = max_iter
-        self.posterior_mean = None
-        self.posterior_cov = None
+    def __init__(self, name: str, role: str, prediction_type: str):
+        self.name = name
+        self.role = role  # production | safety | research | cold_start
+        self.prediction_type = prediction_type  # probability | expectation
 
-    @staticmethod
-    def _sigmoid(z: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-z))
+    @abstractmethod
+    def fit(self, df: pd.DataFrame, features: List[str], target: str):
+        pass
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "BayesianLogisticIRLS":
-        w = self.prior_mean.copy()
+    @abstractmethod
+    def predict(self, df: pd.DataFrame) -> np.ndarray:
+        pass
 
-        for _ in range(self.max_iter):
-            z = X @ w
-            p = self._sigmoid(z)
+    @abstractmethod
+    def evaluate(self, df: pd.DataFrame, target: str) -> Dict[str, float]:
+        pass
 
-            W = np.clip(p * (1.0 - p), 1e-6, None)
-            z_tilde = z + (y - p) / W
-
-            H = X.T @ (W[:, None] * X) + self.prior_prec
-            b = X.T @ (W * z_tilde) + self.prior_prec @ self.prior_mean
-
-            w_new = np.linalg.solve(H, b)
-            if np.linalg.norm(w_new - w) < 1e-6:
-                break
-            w = w_new
-
-        self.posterior_mean = w
-        self.posterior_cov = np.linalg.inv(H)
+    # ------------------------------
+    # Optional but REQUIRED hooks
+    # ------------------------------
+    def calibrate(self, df: pd.DataFrame, target: str):
+        """
+        Hook for Platt / Isotonic calibration.
+        No-op by default.
+        """
         return self
 
-    def predict(self, X: np.ndarray) -> tuple[float, float, float, float]:
-        mu = X @ self.posterior_mean
-        var = np.sum(X @ self.posterior_cov * X, axis=1)
-
-        prob = self._sigmoid(mu / np.sqrt(1.0 + np.pi * var / 8.0))
-        prob = np.clip(prob, 1e-6, 1.0 - 1e-6)
-
-        epistemic = np.sqrt(var)
-        aleatoric = np.sqrt(prob * (1 - prob))
-        predictive = np.sqrt(epistemic**2 + aleatoric**2)
-
-        return float(prob[0]), float(predictive[0]), float(epistemic[0]), float(aleatoric[0])
+    def benchmark_latency(self, df: pd.DataFrame, n_runs: int = 300) -> float:
+        start = time.time()
+        for _ in range(n_runs):
+            _ = self.predict(df)
+        return (time.time() - start) / n_runs
 
 
-# ---------------------------------------------------------------------
-# Hierarchical Bayesian Logistic Demand Model (PRIMARY)
-# ---------------------------------------------------------------------
-class HierarchicalBayesianLogisticDemand:
+# ============================================================
+# Model 1 — LightGBM Tweedie (Revenue King)
+# ============================================================
+
+import lightgbm as lgb
+
+class LGBMTweedie(DemandModel):
     """
-    PRIMARY DEMAND MODEL
-
-    P(Y = 1 | x, p) = σ(wᵀx + β · log(p))
-
-    Hierarchy:
-        City → Neighborhood → Listing
-    """
-
-    def __init__(self, beta_price: float, min_listing_obs: int = 10):
-        self.beta = beta_price
-        self.min_listing_obs = min_listing_obs
-
-        self.city_model = None
-        self.neighborhood_models: Dict[str, BayesianLogisticIRLS] = {}
-        self.listing_models: Dict[str, BayesianLogisticIRLS] = {}
-
-        self.city_n = 0
-        self.neighborhood_n: Dict[str, int] = {}
-        self.listing_n: Dict[str, int] = {}
-
-        self.feature_cols = None
-        self.scaler = StandardScaler()
-
-    def _design(self, X: np.ndarray, log_price: np.ndarray) -> np.ndarray:
-        return np.hstack([X, self.beta * log_price])
-
-    def fit(self, df: pd.DataFrame, feature_cols: list[str]) -> None:
-        logger.info("Training Hierarchical Bayesian Logistic Demand Model")
-        df = df.reset_index(drop=True)
-
-
-        self.feature_cols = feature_cols
-        self.city_n = len(df)
-
-        X = self.scaler.fit_transform(df[feature_cols].values)
-        log_price = np.log1p(df["price"].values).reshape(-1, 1)
-        y = df["is_booked"].values
-
-        X_full = self._design(X, log_price)
-        dim = X_full.shape[1]
-
-        # City model
-        self.city_model = BayesianLogisticIRLS(
-            prior_mean=np.zeros(dim),
-            prior_cov=np.eye(dim) * 5.0
-        ).fit(X_full, y)
-
-        # Neighborhood models
-        for hood, g in df.groupby("neighborhood"):
-            if len(g) < 20:
-                continue
-            model = BayesianLogisticIRLS(
-                self.city_model.posterior_mean,
-                self.city_model.posterior_cov
-            ).fit(X_full[g.index], y[g.index])
-
-            self.neighborhood_models[hood] = model
-            self.neighborhood_n[hood] = len(g)
-
-        # Listing models
-        for lid, g in df.groupby("listing_id"):
-            if len(g) < self.min_listing_obs:
-                continue
-            hood = g["neighborhood"].iloc[0]
-            prior = self.neighborhood_models.get(hood, self.city_model)
-
-            model = BayesianLogisticIRLS(
-                prior.posterior_mean,
-                prior.posterior_cov
-            ).fit(X_full[g.index], y[g.index])
-
-            self.listing_models[str(lid)] = model
-            self.listing_n[str(lid)] = len(g)
-
-        logger.info("Hierarchy training complete")
-
-    def predict(self, context: dict, price: float) -> DemandPrediction:
-        X = self.scaler.transform(
-            np.array([[context[f] for f in self.feature_cols]])
-        )
-        X_full = self._design(X, np.array([[np.log1p(price)]]))
-
-        lid = str(context.get("listing_id"))
-        hood = context.get("neighborhood")
-
-        if lid in self.listing_models:
-            model, level, n_obs = self.listing_models[lid], "listing", self.listing_n[lid]
-        elif hood in self.neighborhood_models:
-            model, level, n_obs = self.neighborhood_models[hood], "neighborhood", self.neighborhood_n[hood]
-        else:
-            model, level, n_obs = self.city_model, "city", self.city_n
-
-        prob, std, epi, ale = model.predict(X_full)
-
-        return DemandPrediction(prob, std, epi, ale, level, n_obs)
-
-
-# ---------------------------------------------------------------------
-# Seasonal Elasticity Extension
-# ---------------------------------------------------------------------
-class SeasonalElasticityDemand(HierarchicalBayesianLogisticDemand):
-    """
-    Adds season × price interaction using contextual month.
-    Month is treated as a relative seasonal indicator (scaled).
-    """
-
-    def _design(self, X: np.ndarray, log_price: np.ndarray) -> np.ndarray:
-        """
-        X[:, 0] is assumed to be 'month' (scaled).
-        """
-        month_scaled = X[:, 0:1]      # shape (1, 1)
-        seasonal = month_scaled * self.beta * log_price
-        return np.hstack([X, self.beta * log_price, seasonal])
-
-
-# ---------------------------------------------------------------------
-# Neighborhood Residual Corrector (Bias Repair)
-# ---------------------------------------------------------------------
-class NeighborhoodResidualCorrector:
-    def __init__(self, shrinkage: float = 0.1):
-        self.residual_means: Dict[str, float] = {}
-        self.shrinkage = shrinkage
-
-    def fit(self, df: pd.DataFrame, model) -> None:
-        for hood, g in df.groupby("neighborhood"):
-            preds = np.array([
-                model.predict(r.to_dict(), r["price"]).prob
-                for _, r in g.iterrows()
-            ])
-            self.residual_means[hood] = self.shrinkage * float(
-                np.mean(g["is_booked"].values - preds)
-            )
-
-    def adjust(self, prob: float, neighborhood: str) -> float:
-        return float(np.clip(prob + self.residual_means.get(neighborhood, 0.0), 0.0, 1.0))
-
-
-# ---------------------------------------------------------------------
-# Monotonicity Enforcer (Safety Layer)
-# ---------------------------------------------------------------------
-class MonotoneDemandWrapper:
-    """
-    SAFETY LAYER ONLY.
-    Enforces monotonicity of demand w.r.t price.
-    """
-
-    def __init__(self, base_model):
-        self.base_model = base_model
-
-    def predict_curve(self, context: dict, price_grid: np.ndarray) -> np.ndarray:
-        preds = np.array([self.base_model.predict(context, p).prob for p in price_grid])
-        return np.minimum.accumulate(preds[::-1])[::-1]
-
-
-# ---------------------------------------------------------------------
-# Competing Model: Monotone GAM (Benchmark)
-# ---------------------------------------------------------------------
-class MonotoneGAMDemand:
-    """
-    Benchmark model only.
+    Predicts expected value (booking count / revenue).
     """
 
     def __init__(self):
+        super().__init__(
+            name="LGBM_Tweedie",
+            role="production",
+            prediction_type="expectation",
+        )
         self.model = None
-        self.scaler = StandardScaler()
 
-    def fit(self, df: pd.DataFrame, feature_cols: list[str]) -> None:
-        X = self.scaler.fit_transform(df[feature_cols].values)
-        y = df["is_booked"].values
+    def fit(self, df, features, target):
+        X = df[features].copy()
+        for c in X.select_dtypes(include=["object"]).columns:
+            X[c] = X[c].astype("category")
 
-        self.model = LogisticGAM(
-            s(0) + f(1) + f(2) + s(3, constraints="monotonic_dec")
-        ).fit(X, y)
+        self.model = lgb.LGBMRegressor(
+            objective="tweedie",
+            tweedie_variance_power=1.3,
+            n_estimators=300,
+            learning_rate=0.05,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            verbose=-1,
+        )
+        self.model.fit(X, df[target])
 
-    def predict(self, context: dict, price: float) -> DemandPrediction:
-        X = self.scaler.transform(np.array([[
-            context["day_of_year"],
-            context["dow"],
-            context["neighborhood_enc"],
-            np.log1p(price)
-        ]]))
+    def predict(self, df):
+        pred = self.model.predict(df)
+        return np.maximum(pred, 0.0)
 
-        prob = float(self.model.predict_proba(X)[0])
-        std = float(np.sqrt(prob * (1 - prob)))
+    def evaluate(self, df, target):
+        return eval_regression(df[target], self.predict(df))
 
-        return DemandPrediction(prob, std, 0.0, std, "GAM", n_obs=0)
+
+# ============================================================
+# Model 2 — DeepFM (Interaction / Discovery)
+# ============================================================
+
+from deepctr.feature_column import SparseFeat, DenseFeat, get_feature_names
+from deepctr.models import DeepFM
+from tensorflow.keras.optimizers import Adam
+
+class DeepFMModel(DemandModel):
+    def __init__(self):
+        super().__init__(
+            name="DeepFM",
+            role="research",
+            prediction_type="probability",
+        )
+        self.model = None
+        self.feature_names = None
+        self.encoders = {}
+        self.scaler = MinMaxScaler()
+
+    def fit(self, df, features, target):
+        X = df[features].copy()
+
+        sparse_features = [
+            f for f in features if df[f].dtype.name in ("category", "object")
+        ]
+        dense_features = [f for f in features if f not in sparse_features]
+
+        if dense_features:
+            X[dense_features] = self.scaler.fit_transform(X[dense_features])
+
+        for feat in sparse_features:
+            le = LabelEncoder()
+            X[feat] = le.fit_transform(X[feat].astype(str)) + 1
+            self.encoders[feat] = le
+
+        feature_columns = (
+            [SparseFeat(f, vocabulary_size=X[f].max() + 1, embedding_dim=8)
+             for f in sparse_features]
+            + [DenseFeat(f, 1) for f in dense_features]
+        )
+
+        self.feature_names = get_feature_names(feature_columns)
+
+        self.model = DeepFM(
+            linear_feature_columns=feature_columns,
+            dnn_feature_columns=feature_columns,
+            task="binary",
+        )
+        self.model.compile(
+            optimizer=Adam(0.001),
+            loss="binary_crossentropy",
+            metrics=["AUC"],
+        )
+
+        model_input = {f: X[f].values for f in self.feature_names}
+        self.model.fit(
+            model_input,
+            df[target].values,
+            batch_size=512,
+            epochs=5,
+            verbose=0,
+        )
+
+    def predict(self, df):
+        X = df.copy()
+
+        dense_features = [f for f in self.feature_names if f not in self.encoders]
+        if dense_features:
+            X[dense_features] = self.scaler.transform(X[dense_features])
+
+        for feat, le in self.encoders.items():
+            X[feat] = X[feat].astype(str).map(
+                lambda x: le.transform([x])[0] + 1 if x in le.classes_ else 0
+            )
+
+        model_input = {f: X[f].values for f in self.feature_names}
+        return _safe_clip(self.model.predict(model_input, batch_size=512).flatten())
+
+    def evaluate(self, df, target):
+        return eval_binary(df[target], self.predict(df))
+
+
+# ============================================================
+# Model 3 — TensorFlow Lattice (Safety-Critical)
+# ============================================================
+
+import tensorflow as tf
+import tensorflow_lattice as tfl
+
+class TFLatticeModel(DemandModel):
+    def __init__(self):
+        super().__init__(
+            name="TF_Lattice",
+            role="safety",
+            prediction_type="probability",
+        )
+        self.model = None
+        self.features = None
+
+    def fit(self, df, features, target):
+        self.features = features
+        price_col = "log_price" if "log_price" in features else "avg_price"
+
+        inputs, calibrators = [], []
+
+        for f in features:
+            inp = tf.keras.layers.Input(shape=(1,), name=f)
+            inputs.append(inp)
+
+            keypoints = np.unique(np.quantile(df[f], np.linspace(0, 1, 10)))
+            monotonicity = -1 if f == price_col else 0
+
+            cal = tfl.layers.PWLCalibration(
+                input_keypoints=keypoints,
+                output_min=0.0,
+                output_max=1.0,
+                monotonicity=monotonicity,
+            )(inp)
+            calibrators.append(cal)
+
+        lattice = tfl.layers.Lattice(
+            lattice_sizes=[2] * len(features),
+            output_min=0.0,
+            output_max=1.0,
+        )(calibrators)
+
+        out = tf.keras.layers.Dense(1, activation="sigmoid")(lattice)
+        self.model = tf.keras.Model(inputs=inputs, outputs=out)
+        self.model.compile(optimizer="adam", loss="binary_crossentropy")
+
+        self.model.fit(
+            [df[f].values for f in features],
+            df[target].values,
+            batch_size=512,
+            epochs=10,
+            verbose=0,
+        )
+
+    def predict(self, df):
+        return _safe_clip(
+            self.model.predict([df[f].values for f in self.features]).flatten()
+        )
+
+    def evaluate(self, df, target):
+        return eval_binary(df[target], self.predict(df))
+
+
+# ============================================================
+# Model 4 — Hierarchical Bayesian Logistic (Cold Start)
+# ============================================================
+
+class HierarchicalBayesianLogit(DemandModel):
+    def __init__(self, beta_prior: float = -0.03):
+        super().__init__(
+            name="HierarchicalBayes",
+            role="cold_start",
+            prediction_type="probability",
+        )
+        self.beta_price = beta_prior
+        self.mu_global = 0.0
+        self.alpha_map = {}
+
+    def fit(self, df, features, target):
+        rate = df[target].mean()
+        self.mu_global = np.log(rate / (1 - rate))
+
+        price_effect = self.beta_price * df["log_price"]
+        smoothed_y = (df[target] * len(df) + 0.5) / (len(df) + 1.0)
+        implied_alpha = np.log(smoothed_y / (1 - smoothed_y)) - price_effect
+
+        self.alpha_map = implied_alpha.groupby(df["listing_id"]).mean().to_dict()
+
+    def predict(self, df):
+        alpha = df["listing_id"].map(self.alpha_map).fillna(self.mu_global)
+        logits = alpha + self.beta_price * df["log_price"]
+        return _safe_clip(expit(logits))
+
+    def evaluate(self, df, target):
+        return eval_binary(df[target], self.predict(df))
+
+
+# ============================================================
+# Routing Logic (Single Source of Truth)
+# ============================================================
+
+def select_model(context: Dict[str, Any]) -> str:
+    """
+    Routing policy for production.
+    """
+    if context.get("cold_start", False):
+        return "HierarchicalBayes"
+    if context.get("price_change_large", False):
+        return "TF_Lattice"
+    return "LGBM_Tweedie"
