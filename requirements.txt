@@ -1,0 +1,56 @@
+# -------------------------------
+# Core numerical stack
+# -------------------------------
+# TensorFlow 2.10 requires numpy < 1.24
+numpy>=1.21,<1.24
+pandas>=1.5
+scipy>=1.10
+
+# -------------------------------
+# Visualization (audit & diagnostics)
+# -------------------------------
+matplotlib>=3.7
+seaborn>=0.12
+
+# -------------------------------
+# Classical ML & statistics
+# -------------------------------
+scikit-learn>=1.2
+statsmodels>=0.14
+
+# -------------------------------
+# Gradient boosting (production demand)
+# -------------------------------
+lightgbm>=4.0
+
+# -------------------------------
+# Deep learning (CRITICAL FIXES HERE)
+# -------------------------------
+# STRICT PIN: 2.10.0 is the last version compatible with DeepCTR structure
+tensorflow==2.10.0
+# STRICT PIN: Required by TF 2.10 to prevent crash
+protobuf==3.19.6
+# STRICT PIN: Required by DeepCTR to prevent build errors
+h5py==3.7.0
+
+# Optional: Compatible lattice version for TF 2.10
+tensorflow-lattice==2.0.10
+econml
+
+# -------------------------------
+# Feature interaction models
+# -------------------------------
+deepctr==0.9.3
+
+# -------------------------------
+# Utilities
+# -------------------------------
+joblib>=1.3
+tqdm>=4.65
+pyyaml>=6.0
+
+# -------------------------------
+# Notebook environment (dev only)
+# -------------------------------
+jupyterlab>=4.0
+ipykernel>=6.25

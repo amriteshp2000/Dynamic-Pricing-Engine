@@ -1,78 +1,44 @@
-# Byte-compiled / optimized / DLL files
+# --- Python Basics ---
 __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-env/
+# --- Virtual Environments ---
+# Ignores your specific environment and common names
+pe/
 venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-*.whl
+venv*/
+env/
+.env
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-*.manifest
-*.spec
+# --- Machine Learning & Data ---
+# Ignore large datasets and model weights
+*.csv
+*.xlsx
+*.json
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.ckpt
+data/
+datasets/
+models/
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-
-# Jupyter Notebook
+# --- Jupyter Notebooks ---
 .ipynb_checkpoints
+*/.ipynb_checkpoints/*
 
-# VS Code
+# --- IDE & Editors ---
 .vscode/
-
-# Spyder
-.spyderproject
-.spyproject
-
-# PyCharm
 .idea/
+*.swp
 
-# MacOS
+# --- Windows & Mac Junk ---
+Thumbs.db
+Desktop.ini
 .DS_Store
 
-# Logs
-*.log
-
-# Dataset files (optional: if dataset is too large, keep it local)
-calendar.csv
-listings.csv
-
-# Temporary files
-*.tmp
-*.swp
+# --- DeepCTR / TensorFlow Logs ---
+logs/
+tensorboard_logs/

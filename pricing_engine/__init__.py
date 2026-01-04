@@ -7,12 +7,14 @@
 from .causal_model import FixedEffectElasticity, LinearDMLElasticity, CausalForestElasticity, run_causal_pipeline
 
 from .demand_model import (
-    HierarchicalBayesianLogisticDemand,
-    SeasonalElasticityDemand,
-    MonotoneDemandWrapper,
-    NeighborhoodResidualCorrector,
-    MonotoneGAMDemand,
+    DemandModel,
+    LGBMTweedie,
+    DeepFMModel,
+    TFLatticeModel,
+    HierarchicalBayesianLogit,
+    select_model,
 )
+
 
 # ---------------------------------------------------------------------
 # Pricing Bandits / Policies
@@ -53,12 +55,13 @@ from .data_loader import load_and_clean_seattle_data
 
 __all__ = [
     # Demand & Causal
-    "DML_ElasticityModel",
-    "HierarchicalBayesianLogisticDemand",
-    "SeasonalElasticityDemand",
-    "MonotoneDemandWrapper",
-    "NeighborhoodResidualCorrector",
-    "MonotoneGAMDemand",
+    "DemandModel",
+    "LGBMTweedie",
+    "DeepFMModel",
+    "TFLatticeModel",
+    "HierarchicalBayesianLogit",
+    "select_model",
+
 
     # Bandits
     "BasePricingBandit",
