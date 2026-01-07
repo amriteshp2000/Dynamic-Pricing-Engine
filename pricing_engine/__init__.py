@@ -12,7 +12,6 @@ from .demand_model import (
     DeepFMModel,
     TFLatticeModel,
     HierarchicalBayesianLogit,
-    select_model,
 )
 
 
@@ -60,7 +59,6 @@ __all__ = [
     "DeepFMModel",
     "TFLatticeModel",
     "HierarchicalBayesianLogit",
-    "select_model",
 
 
     # Bandits
