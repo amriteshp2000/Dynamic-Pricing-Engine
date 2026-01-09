@@ -1,4 +1,6 @@
 import time
+import os
+import joblib
 import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
@@ -35,27 +37,7 @@ class ModelConfig:
             raise ValueError(f"Price col '{self.price_col}' missing from features")
 
 # ============================================================
-# Shared Utilities
-# ============================================================
-
-def _safe_clip(pred: np.ndarray) -> np.ndarray:
-    pred = np.nan_to_num(pred, nan=0.0, posinf=1.0, neginf=0.0)
-    return np.clip(pred, 1e-5, 1.0 - 1e-5)
-
-def eval_binary(y_true, y_pred):
-    y_pred = _safe_clip(y_pred)
-    return {
-        "logloss": log_loss(y_true, y_pred),
-        "auc": roc_auc_score(y_true, y_pred),
-    }
-
-def eval_regression(y_true, y_pred):
-    return {
-        "rmse": np.sqrt(mean_squared_error(y_true, y_pred)),
-    }
-
-# ============================================================
-# Base Interface
+# Base Interface (With Serialization)
 # ============================================================
 
 class DemandModel(ABC):
@@ -88,14 +70,71 @@ class DemandModel(ABC):
     def evaluate(self, df: pd.DataFrame, target: str) -> Dict[str, float]:
         if not self._fitted: raise RuntimeError(f"{self.name} not fitted")
         if self.prediction_type == "expectation":
-            return eval_regression(df[target], self.predict(df))
-        return eval_binary(df[target], self.predict(df))
+            return {"rmse": np.sqrt(mean_squared_error(df[target], self.predict(df)))}
+        return {
+            "logloss": log_loss(df[target], self.predict(df)),
+            "auc": roc_auc_score(df[target], self.predict(df))
+        }
 
     def _validate_prediction_input(self, df: pd.DataFrame):
         if not self._fitted: raise RuntimeError(f"{self.name} not fitted")
         missing = set(self._features_used) - set(df.columns)
         if missing and not all(m in df.index.names for m in missing):
             raise ValueError(f"Missing features: {missing}")
+
+    # --- Standard Saving (For non-Keras models) ---
+    def save(self, path: str):
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: str):
+        return joblib.load(path)
+
+# ============================================================
+# Keras Model Mixin (Handles Special Saving)
+# ============================================================
+class KerasDemandModel(DemandModel):
+    """Mixin to handle safe saving of Keras objects"""
+    def save(self, base_path: str):
+        # 1. Create a directory for this model
+        model_dir = base_path + "_artifacts"
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # 2. Save Keras model natively
+        keras_path = os.path.join(model_dir, "keras_model")
+        self.model.save(keras_path)
+        
+        # 3. Temporarily detach model to pickle the wrapper
+        keras_ref = self.model
+        self.model = None
+        
+        # 4. Save wrapper logic
+        wrapper_path = os.path.join(model_dir, "wrapper.pkl")
+        joblib.dump(self, wrapper_path)
+        
+        # 5. Restore reference
+        self.model = keras_ref
+        
+        # 6. Save a pointer file
+        with open(base_path, 'w') as f:
+            f.write(model_dir)
+
+    @classmethod
+    def load(cls, base_path: str):
+        with open(base_path, 'r') as f:
+            model_dir = f.read().strip()
+        wrapper = joblib.load(os.path.join(model_dir, "wrapper.pkl"))
+        keras_path = os.path.join(model_dir, "keras_model")
+        wrapper.model = tf.keras.models.load_model(keras_path)
+        return wrapper
+
+# ============================================================
+# Shared Utilities
+# ============================================================
+
+def _safe_clip(pred: np.ndarray) -> np.ndarray:
+    pred = np.nan_to_num(pred, nan=0.0, posinf=1.0, neginf=0.0)
+    return np.clip(pred, 1e-5, 1.0 - 1e-5)
 
 # ============================================================
 # Model 1: LGBM (Production)
@@ -147,9 +186,9 @@ class LGBMTweedie(DemandModel):
         return self.model.predict_proba(X)[:, 1]
 
 # ============================================================
-# Model 2: DeepFM (Research)
+# Model 2: DeepFM (Research) - Uses KerasDemandModel
 # ============================================================
-class DeepFMModel(DemandModel):
+class DeepFMModel(KerasDemandModel):
     def __init__(self, config: ModelConfig = None, hyperparams: Dict = None):
         super().__init__("DeepFM", "research", "probability", config, hyperparams)
         self.model = None; self.feature_names = None; self.encoders = {}; self.scaler = MinMaxScaler()
@@ -203,9 +242,9 @@ class DeepFMModel(DemandModel):
         return _safe_clip(self.model.predict({f: X[f].values for f in self.feature_names}, batch_size=1024).flatten())
 
 # ============================================================
-# Model 3: TF Lattice (Safety - HIGH CAPACITY)
+# Model 3: TF Lattice (Safety) - Uses KerasDemandModel
 # ============================================================
-class TFLatticeModel(DemandModel):
+class TFLatticeModel(KerasDemandModel):
     def __init__(self, config: ModelConfig = None, hyperparams: Dict = None):
         super().__init__("TF_Lattice", "safety", "probability", config, hyperparams)
         self.model = None
@@ -215,6 +254,10 @@ class TFLatticeModel(DemandModel):
         self._features_used = [f for f in features if df[f].dtype.kind in 'biufc']
         train_df, val_df = self._split_val(df, target)
         
+        # Init Bias
+        mean_rate = df[target].mean()
+        init_bias = np.log(np.clip(mean_rate, 1e-5, 1-1e-5) / (1 - np.clip(mean_rate, 1e-5, 1-1e-5)))
+        
         inputs, calibrators = [], []
         lattice_monotonicities = []
         
@@ -223,7 +266,6 @@ class TFLatticeModel(DemandModel):
             inputs.append(inp)
             
             clean_vals = train_df[f].dropna().values
-            # INCREASED RESOLUTION: 20 keypoints (was 10)
             if len(clean_vals) > 0:
                 span = clean_vals.max() - clean_vals.min()
                 kp = np.linspace(clean_vals.min() - 0.05*span, clean_vals.max() + 0.05*span, 20)
@@ -244,18 +286,17 @@ class TFLatticeModel(DemandModel):
             )(inp)
             calibrators.append(cal)
 
-        # INCREASED CAPACITY: Size 3 (Quadratic/Curved) instead of 2 (Linear)
         lattice = tfl.layers.Lattice(
             lattice_sizes=[3] * len(self._features_used), 
             output_min=0.0, output_max=1.0, 
             monotonicities=lattice_monotonicities
         )(calibrators)
         
-        # POSITIVE INITIALIZATION: Helps optimizer escape zero-trap with NonNeg constraint
         out = tf.keras.layers.Dense(
             1, activation="sigmoid", 
             kernel_constraint=tf.keras.constraints.NonNeg(),
-            kernel_initializer=tf.keras.initializers.RandomUniform(minval=0.1, maxval=1.0)
+            kernel_initializer=tf.keras.initializers.RandomUniform(minval=0.1, maxval=1.0),
+            bias_initializer=tf.keras.initializers.Constant(init_bias)
         )(lattice)
         
         self.model = tf.keras.Model(inputs=inputs, outputs=out)
