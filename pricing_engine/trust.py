@@ -17,6 +17,24 @@ class TrustMetrics:
     safety_clamp_rate: float    # % of prices modified by Safety Governor
     safety_violations: int      # Critical failures
     volatility_reduction: float # Is the agent smoother than the human?
+def _prepare_model_frame(row: pd.Series, model) -> pd.DataFrame:
+    """
+    Enforces correct schema for demand model inference.
+    """
+    df = row.to_frame().T.copy()
+
+    # Cast categoricals
+    if hasattr(model, "cat_cols"):
+        for c in model.cat_cols:
+            if c in df.columns:
+                df[c] = df[c].astype("category")
+
+    # Force numeric columns
+    for c in df.columns:
+        if c not in getattr(model, "cat_cols", []):
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+
+    return df
 
 class TrustEvaluator:
     """
@@ -80,10 +98,8 @@ class TrustEvaluator:
             hist_prices.append(p_hist)
             
             # 5. Fast DR Calculation
-            ctx = row.to_frame().T
-            if hasattr(models[ModelRole.MEAN], "cat_cols"):
-                 for c in models[ModelRole.MEAN].cat_cols:
-                     if c in ctx.columns: ctx[c] = ctx[c].astype("category")
+            ctx = _prepare_model_frame(row, models[ModelRole.MEAN])
+            prob_agent = models[ModelRole.MEAN].predict(ctx)[0]
 
             # Predict
             prob_agent = models[ModelRole.MEAN].predict(ctx)[0]
